@@ -2,7 +2,7 @@ import express from 'express';
 import admin from 'firebase-admin';
 
 // Import your service account key
-import serviceAccount from './service-account-key.json' with { type: 'json' };
+import serviceAccount from '../service-account-key.json' with { type: 'json' };
 
 // Initialize the Firebase Admin SDK
 admin.initializeApp({
