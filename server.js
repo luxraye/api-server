@@ -1,6 +1,7 @@
 import express from 'express';
 import admin from 'firebase-admin';
 import serviceAccount from './service-account-key.json' with { type: 'json' };
+import cors from 'cors';
 
 // Initialize the Firebase Admin SDK
 admin.initializeApp({
@@ -9,6 +10,7 @@ admin.initializeApp({
 
 const app = express();
 app.use(express.json());
+app.use(cors());
 const PORT = process.env.PORT || 3000;
 
 // Middleware to verify Firebase ID Token
