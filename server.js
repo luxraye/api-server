@@ -16,7 +16,6 @@ const db = admin.firestore();
 const auth = admin.auth();
 
 // VerifyToken middleware (unchanged)
-// This just confirms the user is valid and gets their UID
 const verifyToken = async (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -47,30 +46,18 @@ app.post('/api/assign-role', verifyToken, async (req, res) => {
   }
 });
 
-
-// --- !!! UPDATED /api/create-request ENDPOINT !!! ---
+// Existing endpoint (unchanged)
 app.post('/api/create-request', verifyToken, async (req, res) => {
-  // Get the UID from the verified token
   const { uid } = req.user; 
-
   try {
-    // 1. --- NEW LOGIC ---
-    // Check the user's role in the Firestore database (the "source of truth")
     const userRoleDoc = await db.collection('user_roles').doc(uid).get();
-
     if (!userRoleDoc.exists || userRoleDoc.data().role !== 'medical_staff') {
-      // This is the correct way to send a JSON error
       return res.status(403).json({ error: 'Forbidden: You do not have permission.' });
     }
-    // -------------------
-
-    // 2. Get data from the request body
     const { hospitalName, bloodType, unitsNeeded, isUrgent } = req.body;
     if (!hospitalName || !bloodType || !unitsNeeded) {
       return res.status(400).json({ error: 'Bad Request: Missing required fields.' });
     }
-
-    // 3. Use ADMIN privileges to write to the collection
     await db.collection('blood_requests').add({
       hospitalName: hospitalName,
       bloodType: bloodType,
@@ -78,12 +65,33 @@ app.post('/api/create-request', verifyToken, async (req, res) => {
       isUrgent: Boolean(isUrgent),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
-    
-    // Send a JSON success response
     res.status(201).json({ message: 'Blood request created successfully.' });
-
   } catch (error) {
     console.error('Error creating blood request:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+
+// --- !!! NEW ENDPOINT TO DELETE A REQUEST !!! ---
+app.delete('/api/requests/:id', verifyToken, async (req, res) => {
+  const { uid } = req.user; // Get the user's UID
+  const { id } = req.params; // Get the document ID from the URL (e.g., /api/requests/XYZ123)
+
+  try {
+    // 1. Verify the user is medical staff
+    const userRoleDoc = await db.collection('user_roles').doc(uid).get();
+    if (!userRoleDoc.exists || userRoleDoc.data().role !== 'medical_staff') {
+      return res.status(403).json({ error: 'Forbidden: You do not have permission.' });
+    }
+
+    // 2. Use ADMIN privileges to delete the document
+    await db.collection('blood_requests').doc(id).delete();
+    
+    res.status(200).json({ message: 'Request deleted successfully.' });
+
+  } catch (error) {
+    console.error(`Error deleting request ${id}:`, error);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
@@ -92,3 +100,4 @@ app.post('/api/create-request', verifyToken, async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
+
