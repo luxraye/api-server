@@ -19,7 +19,7 @@ const auth = admin.auth();
 const verifyToken = async (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).send('Unauthorized: No token provided.');
+    return res.status(401).json({ error: 'Unauthorized: No token provided.' });
   }
   const idToken = authHeader.split('Bearer ')[1];
   try {
@@ -27,26 +27,26 @@ const verifyToken = async (req, res, next) => {
     next();
   } catch (error) {
     console.error('Error verifying token:', error);
-    return res.status(401).send('Unauthorized: Invalid token.');
+    return res.status(401).json({ error: 'Unauthorized: Invalid token.' });
   }
 };
 
-// Existing endpoint (unchanged)
+// --- EXISTING ENDPOINTS (UNCHANGED) ---
+
+// Assign role to new user
 app.post('/api/assign-role', verifyToken, async (req, res) => {
   const { uid } = req.user; 
-  console.log(`Assigning role to verified UID: ${uid}`);
   try {
     await auth.setCustomUserClaims(uid, { role: 'regular_user' });
     const userRolesRef = db.collection('user_roles').doc(uid);
     await userRolesRef.set({ role: 'regular_user' });
-    res.status(200).send({ message: `Successfully assigned role to user ${uid}` });
+    res.status(200).json({ message: `Successfully assigned role to user ${uid}` });
   } catch (error) {
-    console.error(`Error assigning role to UID: ${uid}`, error);
-    res.status(500).send({ error: 'Internal Server Error' });
+    res.status(500).json({ error: 'Internal Server Error' });
   }
 });
 
-// Existing endpoint (unchanged)
+// Create a blood request
 app.post('/api/create-request', verifyToken, async (req, res) => {
   const { uid } = req.user; 
   try {
@@ -55,43 +55,73 @@ app.post('/api/create-request', verifyToken, async (req, res) => {
       return res.status(403).json({ error: 'Forbidden: You do not have permission.' });
     }
     const { hospitalName, bloodType, unitsNeeded, isUrgent } = req.body;
-    if (!hospitalName || !bloodType || !unitsNeeded) {
-      return res.status(400).json({ error: 'Bad Request: Missing required fields.' });
-    }
     await db.collection('blood_requests').add({
-      hospitalName: hospitalName,
-      bloodType: bloodType,
+      hospitalName,
+      bloodType,
       unitsNeeded: Number(unitsNeeded),
       isUrgent: Boolean(isUrgent),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
     res.status(201).json({ message: 'Blood request created successfully.' });
   } catch (error) {
-    console.error('Error creating blood request:', error);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
 
-
-// --- !!! NEW ENDPOINT TO DELETE A REQUEST !!! ---
+// Delete a blood request
 app.delete('/api/requests/:id', verifyToken, async (req, res) => {
-  const { uid } = req.user; // Get the user's UID
-  const { id } = req.params; // Get the document ID from the URL (e.g., /api/requests/XYZ123)
-
+  const { uid } = req.user; 
+  const { id } = req.params; 
   try {
-    // 1. Verify the user is medical staff
     const userRoleDoc = await db.collection('user_roles').doc(uid).get();
     if (!userRoleDoc.exists || userRoleDoc.data().role !== 'medical_staff') {
       return res.status(403).json({ error: 'Forbidden: You do not have permission.' });
     }
-
-    // 2. Use ADMIN privileges to delete the document
     await db.collection('blood_requests').doc(id).delete();
-    
     res.status(200).json({ message: 'Request deleted successfully.' });
+  } catch (error) {
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// --- !!! NEW ENDPOINT TO REGISTER A DONATION !!! ---
+app.post('/api/register-donation', verifyToken, async (req, res) => {
+  const { uid: medicalStaffUid } = req.user; // UID of the staff member
+  const { donorUid, location, bloodUnitID } = req.body; // Data for the donation
+
+  if (!donorUid || !location || !bloodUnitID) {
+    return res.status(400).json({ error: 'Bad Request: Missing required fields.' });
+  }
+
+  try {
+    // 1. Verify the user is medical staff
+    const userRoleDoc = await db.collection('user_roles').doc(medicalStaffUid).get();
+    if (!userRoleDoc.exists || userRoleDoc.data().role !== 'medical_staff') {
+      return res.status(403).json({ error: 'Forbidden: You do not have permission.' });
+    }
+    
+    // 2. Verify the donor user actually exists
+    await auth.getUser(donorUid); 
+
+    // 3. Use ADMIN privileges to write to the donor's subcollection
+    const historyRef = db.collection('user_profiles').doc(donorUid)
+                         .collection('donation_history');
+                         
+    await historyRef.add({
+      donatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      location: location,
+      status: "Verified", // This is the first "on-chain" status
+      bloodUnitID: bloodUnitID,
+      registeredBy: medicalStaffUid, // Audit trail
+    });
+    
+    res.status(201).json({ message: `Donation registered for user ${donorUid}` });
 
   } catch (error) {
-    console.error(`Error deleting request ${id}:`, error);
+    if (error.code === 'auth/user-not-found') {
+      return res.status(404).json({ error: 'Donor user not found.' });
+    }
+    console.error('Error registering donation:', error);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
