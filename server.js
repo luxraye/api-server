@@ -15,7 +15,7 @@ const PORT = process.env.PORT || 3000;
 const db = admin.firestore();
 const auth = admin.auth();
 
-// VerifyToken middleware (unchanged)
+// VerifyToken middleware
 const verifyToken = async (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -31,31 +31,61 @@ const verifyToken = async (req, res, next) => {
   }
 };
 
-// --- EXISTING ENDPOINTS (UNCHANGED) ---
-// (assign-role, create-request, delete-request)
-app.post('/api/assign-role', /* ... */ );
-app.post('/api/create-request', /* ... */ );
-app.delete('/api/requests/:id', /* ... */ );
-// (We'll hide the full code for brevity, just know they are still here)
-// ... (The full code for the other endpoints is exactly as it was) ...
+// --- Endpoint: Assign role to new user ---
 app.post('/api/assign-role', verifyToken, async (req, res) => {
   const { uid } = req.user; 
-  try { await auth.setCustomUserClaims(uid, { role: 'regular_user' }); const userRolesRef = db.collection('user_roles').doc(uid); await userRolesRef.set({ role: 'regular_user' }); res.status(200).json({ message: `Successfully assigned role to user ${uid}` }); } catch (error) { res.status(500).json({ error: 'Internal Server Error' }); }
+  try { 
+    await auth.setCustomUserClaims(uid, { role: 'regular_user' }); 
+    const userRolesRef = db.collection('user_roles').doc(uid); 
+    await userRolesRef.set({ role: 'regular_user' }); 
+    res.status(200).json({ message: `Successfully assigned role to user ${uid}` }); 
+  } catch (error) { 
+    res.status(500).json({ error: 'Internal Server Error' }); 
+  }
 });
+
+// --- Endpoint: Create a blood request (Medical Staff) ---
 app.post('/api/create-request', verifyToken, async (req, res) => {
   const { uid } = req.user; 
-  try { const userRoleDoc = await db.collection('user_roles').doc(uid).get(); if (!userRoleDoc.exists || userRoleDoc.data().role !== 'medical_staff') { return res.status(403).json({ error: 'Forbidden: You do not have permission.' }); } const { hospitalName, bloodType, unitsNeeded, isUrgent } = req.body; await db.collection('blood_requests').add({ hospitalName, bloodType, unitsNeeded: Number(unitsNeeded), isUrgent: Boolean(isUrgent), createdAt: admin.firestore.FieldValue.serverTimestamp(), }); res.status(201).json({ message: 'Blood request created successfully.' }); } catch (error) { res.status(500).json({ error: 'Internal Server Error' }); }
+  try { 
+    const userRoleDoc = await db.collection('user_roles').doc(uid).get(); 
+    if (!userRoleDoc.exists || userRoleDoc.data().role !== 'medical_staff') { 
+      return res.status(403).json({ error: 'Forbidden: You do not have permission.' }); 
+    } 
+    const { hospitalName, bloodType, unitsNeeded, isUrgent } = req.body; 
+    await db.collection('blood_requests').add({ 
+      hospitalName, 
+      bloodType, 
+      unitsNeeded: Number(unitsNeeded), 
+      isUrgent: Boolean(isUrgent), 
+      createdAt: admin.firestore.FieldValue.serverTimestamp(), 
+    }); 
+    res.status(201).json({ message: 'Blood request created successfully.' }); 
+  } catch (error) { 
+    res.status(500).json({ error: 'Internal Server Error' }); 
+  }
 });
+
+// --- Endpoint: Delete a blood request (Medical Staff) ---
 app.delete('/api/requests/:id', verifyToken, async (req, res) => {
-  const { uid } = req.user; const { id } = req.params; 
-  try { const userRoleDoc = await db.collection('user_roles').doc(uid).get(); if (!userRoleDoc.exists || userRoleDoc.data().role !== 'medical_staff') { return res.status(403).json({ error: 'Forbidden: You do not have permission.' }); } await db.collection('blood_requests').doc(id).delete(); res.status(200).json({ message: 'Request deleted successfully.' }); } catch (error) { res.status(500).json({ error: 'Internal Server Error' }); }
+  const { uid } = req.user; 
+  const { id } = req.params; 
+  try { 
+    const userRoleDoc = await db.collection('user_roles').doc(uid).get(); 
+    if (!userRoleDoc.exists || userRoleDoc.data().role !== 'medical_staff') { 
+      return res.status(403).json({ error: 'Forbidden: You do not have permission.' }); 
+    } 
+    await db.collection('blood_requests').doc(id).delete(); 
+    res.status(200).json({ message: 'Request deleted successfully.' }); 
+  } catch (error) { 
+    res.status(500).json({ error: 'Internal Server Error' }); 
+  }
 });
 
-
-// --- !!! UPGRADED /api/register-donation ENDPOINT !!! ---
+// --- Endpoint: Register a new donation (Medical Staff) ---
 app.post('/api/register-donation', verifyToken, async (req, res) => {
   const { uid: medicalStaffUid } = req.user; // UID of the staff member
-  const { donorUid, location, bloodUnitID, bloodType } = req.body; // Added bloodType
+  const { donorUid, location, bloodUnitID, bloodType } = req.body; // Data for the donation
 
   if (!donorUid || !location || !bloodUnitID || !bloodType) {
     return res.status(400).json({ error: 'Bad Request: Missing required fields.' });
@@ -72,11 +102,9 @@ app.post('/api/register-donation', verifyToken, async (req, res) => {
     await auth.getUser(donorUid); 
 
     // --- ATOMIC BATCH WRITE ---
-    // This ensures BOTH writes succeed or BOTH fail.
     const batch = db.batch();
 
     // 3A. Write to the PUBLIC "blockchain_ledger"
-    // We use the bloodUnitID as the "block" ID
     const publicRef = db.collection('blockchain_ledger').doc(bloodUnitID);
     batch.set(publicRef, {
       donorId: donorUid, // This links the block to the user
