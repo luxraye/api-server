@@ -15,7 +15,7 @@ const PORT = process.env.PORT || 3000;
 const db = admin.firestore();
 const auth = admin.auth();
 
-// VerifyToken middleware
+// VerifyToken middleware (unchanged)
 const verifyToken = async (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -31,7 +31,7 @@ const verifyToken = async (req, res, next) => {
   }
 };
 
-// --- Endpoint: Assign role to new user ---
+// --- Endpoint: Assign role to new user (unchanged) ---
 app.post('/api/assign-role', verifyToken, async (req, res) => {
   const { uid } = req.user; 
   try { 
@@ -44,7 +44,7 @@ app.post('/api/assign-role', verifyToken, async (req, res) => {
   }
 });
 
-// --- Endpoint: Create a blood request (Medical Staff) ---
+// --- Endpoint: Create a blood request (Medical Staff) (unchanged) ---
 app.post('/api/create-request', verifyToken, async (req, res) => {
   const { uid } = req.user; 
   try { 
@@ -66,7 +66,7 @@ app.post('/api/create-request', verifyToken, async (req, res) => {
   }
 });
 
-// --- Endpoint: Delete a blood request (Medical Staff) ---
+// --- Endpoint: Delete a blood request (Medical Staff) (unchanged) ---
 app.delete('/api/requests/:id', verifyToken, async (req, res) => {
   const { uid } = req.user; 
   const { id } = req.params; 
@@ -103,19 +103,21 @@ app.post('/api/register-donation', verifyToken, async (req, res) => {
 
     // --- ATOMIC BATCH WRITE ---
     const batch = db.batch();
+    const serverTime = admin.firestore.FieldValue.serverTimestamp(); // For top-level fields
+    const jsTime = new Date(); // For fields inside arrays
 
     // 3A. Write to the PUBLIC "blockchain_ledger"
     const publicRef = db.collection('blockchain_ledger').doc(bloodUnitID);
     batch.set(publicRef, {
       donorId: donorUid, // This links the block to the user
-      registeredAt: admin.firestore.FieldValue.serverTimestamp(),
+      registeredAt: serverTime, // Use server timestamp here
       bloodType: bloodType,
       currentLocation: location,
       statusHistory: [ // This is the audit trail
         {
           status: "Verified",
           location: location,
-          timestamp: admin.firestore.FieldValue.serverTimestamp(),
+          timestamp: jsTime, // <-- THIS IS THE FIX
           registeredBy: medicalStaffUid
         }
       ]
@@ -126,7 +128,7 @@ app.post('/api/register-donation', verifyToken, async (req, res) => {
                          .collection('donation_history').doc(bloodUnitID); // Use same ID
     batch.set(privateRef, {
       ledgerId: bloodUnitID, // This points to the public record
-      donatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      donatedAt: jsTime, // Use JS time here too for consistency
       location: location,
       status: "Verified"
     });
