@@ -82,7 +82,7 @@ app.delete('/api/requests/:id', verifyToken, async (req, res) => {
   }
 });
 
-// --- Endpoint: Register a new donation (Medical Staff) ---
+// --- Endpoint: Register a new donation (Medical Staff) (unchanged) ---
 app.post('/api/register-donation', verifyToken, async (req, res) => {
   const { uid: medicalStaffUid } = req.user; // UID of the staff member
   const { donorUid, location, bloodUnitID, bloodType } = req.body; // Data for the donation
@@ -117,7 +117,7 @@ app.post('/api/register-donation', verifyToken, async (req, res) => {
         {
           status: "Verified",
           location: location,
-          timestamp: jsTime, // <-- THIS IS THE FIX
+          timestamp: jsTime,
           registeredBy: medicalStaffUid
         }
       ]
@@ -128,7 +128,7 @@ app.post('/api/register-donation', verifyToken, async (req, res) => {
                          .collection('donation_history').doc(bloodUnitID); // Use same ID
     batch.set(privateRef, {
       ledgerId: bloodUnitID, // This points to the public record
-      donatedAt: jsTime, // Use JS time here too for consistency
+      donatedAt: jsTime,
       location: location,
       status: "Verified"
     });
@@ -147,7 +147,67 @@ app.post('/api/register-donation', verifyToken, async (req, res) => {
   }
 });
 
+// --- !!! NEW ENDPOINT: UPDATE DONATION STATUS !!! ---
+app.post('/api/update-status', verifyToken, async (req, res) => {
+  const { uid: medicalStaffUid } = req.user; // UID of the staff member
+  const { bloodUnitID, newStatus, newLocation } = req.body;
+
+  if (!bloodUnitID || !newStatus || !newLocation) {
+    return res.status(400).json({ error: 'Bad Request: Missing required fields.' });
+  }
+
+  try {
+    // 1. Verify the user is medical staff
+    const userRoleDoc = await db.collection('user_roles').doc(medicalStaffUid).get();
+    if (!userRoleDoc.exists || userRoleDoc.data().role !== 'medical_staff') {
+      return res.status(403).json({ error: 'Forbidden: You do not have permission.' });
+    }
+
+    // --- ATOMIC BATCH WRITE ---
+    const batch = db.batch();
+    const jsTime = new Date(); // For fields inside arrays
+
+    // 2. Get the public ledger doc
+    const publicRef = db.collection('blockchain_ledger').doc(bloodUnitID);
+    const docSnap = await publicRef.get();
+    if (!docSnap.exists) {
+      return res.status(404).json({ error: 'Blood unit not found in ledger.' });
+    }
+    const donorUid = docSnap.data().donorId; // Get the donor's ID
+
+    // 3A. Update the PUBLIC "blockchain_ledger"
+    // We add the new status object to the 'statusHistory' array
+    batch.update(publicRef, {
+      currentLocation: newLocation,
+      statusHistory: admin.firestore.FieldValue.arrayUnion({
+        status: newStatus,
+        location: newLocation,
+        timestamp: jsTime,
+        registeredBy: medicalStaffUid
+      })
+    });
+
+    // 3B. Update the PRIVATE "donation_history" doc for the user
+    const privateRef = db.collection('user_profiles').doc(donorUid)
+                         .collection('donation_history').doc(bloodUnitID);
+    batch.update(privateRef, {
+      status: newStatus, // Update the quick-reference status
+      location: newLocation
+    });
+
+    // 4. Commit the atomic write
+    await batch.commit();
+
+    res.status(200).json({ message: `Status for ${bloodUnitID} updated to ${newStatus}` });
+
+  } catch (error) {
+    console.error('Error updating status:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
+
 
