@@ -3,7 +3,6 @@ import admin from 'firebase-admin';
 import cors from 'cors';
 import serviceAccount from './service-account-key.json' with { type: 'json' };
 
-// Initialize the Firebase Admin SDK
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
 });
@@ -15,199 +14,188 @@ const PORT = process.env.PORT || 3000;
 const db = admin.firestore();
 const auth = admin.auth();
 
-// VerifyToken middleware (unchanged)
+// Middleware to verify Firebase ID Token
 const verifyToken = async (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Unauthorized: No token provided.' });
+    return res.status(401).send({ error: 'Unauthorized: No token provided.' });
   }
   const idToken = authHeader.split('Bearer ')[1];
   try {
-    req.user = await auth.verifyIdToken(idToken); 
+    req.user = await auth.verifyIdToken(idToken);
     next();
   } catch (error) {
     console.error('Error verifying token:', error);
-    return res.status(401).json({ error: 'Unauthorized: Invalid token.' });
+    return res.status(401).send({ error: 'Unauthorized: Invalid token.' });
   }
 };
 
-// --- Endpoint: Assign role to new user (unchanged) ---
+// --- Endpoint: Assign Role ---
 app.post('/api/assign-role', verifyToken, async (req, res) => {
-  const { uid } = req.user; 
-  try { 
-    await auth.setCustomUserClaims(uid, { role: 'regular_user' }); 
-    const userRolesRef = db.collection('user_roles').doc(uid); 
-    await userRolesRef.set({ role: 'regular_user' }); 
-    res.status(200).json({ message: `Successfully assigned role to user ${uid}` }); 
-  } catch (error) { 
-    res.status(500).json({ error: 'Internal Server Error' }); 
-  }
-});
-
-// --- Endpoint: Create a blood request (Medical Staff) (unchanged) ---
-app.post('/api/create-request', verifyToken, async (req, res) => {
-  const { uid } = req.user; 
-  try { 
-    const userRoleDoc = await db.collection('user_roles').doc(uid).get(); 
-    if (!userRoleDoc.exists || userRoleDoc.data().role !== 'medical_staff') { 
-      return res.status(403).json({ error: 'Forbidden: You do not have permission.' }); 
-    } 
-    const { hospitalName, bloodType, unitsNeeded, isUrgent } = req.body; 
-    await db.collection('blood_requests').add({ 
-      hospitalName, 
-      bloodType, 
-      unitsNeeded: Number(unitsNeeded), 
-      isUrgent: Boolean(isUrgent), 
-      createdAt: admin.firestore.FieldValue.serverTimestamp(), 
-    }); 
-    res.status(201).json({ message: 'Blood request created successfully.' }); 
-  } catch (error) { 
-    res.status(500).json({ error: 'Internal Server Error' }); 
-  }
-});
-
-// --- Endpoint: Delete a blood request (Medical Staff) (unchanged) ---
-app.delete('/api/requests/:id', verifyToken, async (req, res) => {
-  const { uid } = req.user; 
-  const { id } = req.params; 
-  try { 
-    const userRoleDoc = await db.collection('user_roles').doc(uid).get(); 
-    if (!userRoleDoc.exists || userRoleDoc.data().role !== 'medical_staff') { 
-      return res.status(403).json({ error: 'Forbidden: You do not have permission.' }); 
-    } 
-    await db.collection('blood_requests').doc(id).delete(); 
-    res.status(200).json({ message: 'Request deleted successfully.' }); 
-  } catch (error) { 
-    res.status(500).json({ error: 'Internal Server Error' }); 
-  }
-});
-
-// --- Endpoint: Register a new donation (Medical Staff) (unchanged) ---
-app.post('/api/register-donation', verifyToken, async (req, res) => {
-  const { uid: medicalStaffUid } = req.user; // UID of the staff member
-  const { donorUid, location, bloodUnitID, bloodType } = req.body; // Data for the donation
-
-  if (!donorUid || !location || !bloodUnitID || !bloodType) {
-    return res.status(400).json({ error: 'Bad Request: Missing required fields.' });
-  }
-
+  const { uid } = req.user;
+  console.log(`Assigning role to verified UID: ${uid}`);
   try {
-    // 1. Verify the user is medical staff
-    const userRoleDoc = await db.collection('user_roles').doc(medicalStaffUid).get();
-    if (!userRoleDoc.exists || userRoleDoc.data().role !== 'medical_staff') {
-      return res.status(403).json({ error: 'Forbidden: You do not have permission.' });
-    }
-    
-    // 2. Verify the donor user actually exists
-    await auth.getUser(donorUid); 
-
-    // --- ATOMIC BATCH WRITE ---
-    const batch = db.batch();
-    const serverTime = admin.firestore.FieldValue.serverTimestamp(); // For top-level fields
-    const jsTime = new Date(); // For fields inside arrays
-
-    // 3A. Write to the PUBLIC "blockchain_ledger"
-    const publicRef = db.collection('blockchain_ledger').doc(bloodUnitID);
-    batch.set(publicRef, {
-      donorId: donorUid, // This links the block to the user
-      registeredAt: serverTime, // Use server timestamp here
-      bloodType: bloodType,
-      currentLocation: location,
-      statusHistory: [ // This is the audit trail
-        {
-          status: "Verified",
-          location: location,
-          timestamp: jsTime,
-          registeredBy: medicalStaffUid
-        }
-      ]
-    });
-
-    // 3B. Write to the PRIVATE "donation_history" (for user's convenience)
-    const privateRef = db.collection('user_profiles').doc(donorUid)
-                         .collection('donation_history').doc(bloodUnitID); // Use same ID
-    batch.set(privateRef, {
-      ledgerId: bloodUnitID, // This points to the public record
-      donatedAt: jsTime,
-      location: location,
-      status: "Verified"
-    });
-    
-    // 4. Commit the atomic write
-    await batch.commit();
-    
-    res.status(201).json({ message: `Donation ${bloodUnitID} registered for user ${donorUid}` });
-
+    await auth.setCustomUserClaims(uid, { role: 'regular_user' });
+    const userRolesRef = db.collection('user_roles').doc(uid);
+    await userRolesRef.set({ role: 'regular_user' });
+    res.status(200).send({ message: `Successfully assigned role to user ${uid}` });
   } catch (error) {
-    if (error.code === 'auth/user-not-found') {
-      return res.status(404).json({ error: 'Donor user not found.' });
-    }
-    console.error('Error registering donation:', error);
-    res.status(500).json({ error: 'Internal Server Error' });
+    console.error(`Error assigning role to UID: ${uid}`, error);
+    res.status(500).send({ error: 'Internal Server Error' });
   }
 });
 
-// --- !!! NEW ENDPOINT: UPDATE DONATION STATUS !!! ---
-app.post('/api/update-status', verifyToken, async (req, res) => {
-  const { uid: medicalStaffUid } = req.user; // UID of the staff member
-  const { bloodUnitID, newStatus, newLocation } = req.body;
+// --- Endpoint: Create Request ---
+app.post('/api/create-request', verifyToken, async (req, res) => {
+  const { uid } = req.user;
+  const userRoleDoc = await db.collection('user_roles').doc(uid).get();
+  const userRole = userRoleDoc.data()?.role;
 
-  if (!bloodUnitID || !newStatus || !newLocation) {
-    return res.status(400).json({ error: 'Bad Request: Missing required fields.' });
+  if (userRole !== 'medical_staff') {
+    return res.status(403).send({ error: 'Forbidden: You do not have permission.' });
+  }
+
+  const { hospitalName, bloodType, unitsNeeded, isUrgent } = req.body;
+  if (!hospitalName || !bloodType || !unitsNeeded) {
+    return res.status(400).send({ error: 'Bad Request: Missing required fields.' });
   }
 
   try {
-    // 1. Verify the user is medical staff
-    const userRoleDoc = await db.collection('user_roles').doc(medicalStaffUid).get();
-    if (!userRoleDoc.exists || userRoleDoc.data().role !== 'medical_staff') {
-      return res.status(403).json({ error: 'Forbidden: You do not have permission.' });
-    }
+    await db.collection('blood_requests').add({
+      hospitalName,
+      bloodType,
+      unitsNeeded: Number(unitsNeeded),
+      isUrgent: Boolean(isUrgent),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    res.status(201).send({ message: 'Blood request created successfully.' });
+  } catch (error) {
+    console.error('Error creating blood request:', error);
+    res.status(500).send({ error: 'Internal Server Error' });
+  }
+});
 
-    // --- ATOMIC BATCH WRITE ---
-    const batch = db.batch();
-    const jsTime = new Date(); // For fields inside arrays
+// --- Endpoint: Delete Request ---
+app.delete('/api/requests/:requestId', verifyToken, async (req, res) => {
+  const { uid } = req.user;
+  const userRoleDoc = await db.collection('user_roles').doc(uid).get();
+  const userRole = userRoleDoc.data()?.role;
 
-    // 2. Get the public ledger doc
-    const publicRef = db.collection('blockchain_ledger').doc(bloodUnitID);
-    const docSnap = await publicRef.get();
-    if (!docSnap.exists) {
-      return res.status(404).json({ error: 'Blood unit not found in ledger.' });
-    }
-    const donorUid = docSnap.data().donorId; // Get the donor's ID
+  if (userRole !== 'medical_staff') {
+    return res.status(403).send({ error: 'Forbidden: You do not have permission.' });
+  }
 
-    // 3A. Update the PUBLIC "blockchain_ledger"
-    // We add the new status object to the 'statusHistory' array
-    batch.update(publicRef, {
-      currentLocation: newLocation,
-      statusHistory: admin.firestore.FieldValue.arrayUnion({
-        status: newStatus,
-        location: newLocation,
-        timestamp: jsTime,
-        registeredBy: medicalStaffUid
-      })
+  const { requestId } = req.params;
+  if (!requestId) {
+    return res.status(400).send({ error: 'Bad Request: Missing request ID.' });
+  }
+
+  try {
+    const docRef = db.collection('blood_requests').doc(requestId);
+    await docRef.delete();
+    res.status(200).send({ message: 'Request deleted successfully.' });
+  } catch (error) {
+    console.error('Error deleting request:', error);
+    res.status(500).send({ error: 'Internal Server Error' });
+  }
+});
+
+// --- Endpoint: Register Donation ---
+app.post('/api/register-donation', verifyToken, async (req, res) => {
+  const { uid } = req.user;
+  const userRoleDoc = await db.collection('user_roles').doc(uid).get();
+  const userRole = userRoleDoc.data()?.role;
+
+  if (userRole !== 'medical_staff') {
+    return res.status(403).send({ error: 'Forbidden: You do not have permission.' });
+  }
+
+  const { donorUID, location, bloodType, bloodUnitID } = req.body;
+  if (!donorUID || !location || !bloodType || !bloodUnitID) {
+    return res.status(400).send({ error: 'Bad Request: Missing required fields.' });
+  }
+
+  try {
+    const timestamp = new Date();
+    const newStatusEntry = {
+      status: "Verified",
+      location: location,
+      timestamp: timestamp,
+    };
+
+    // 1. Write to the public, immutable ledger
+    const ledgerRef = db.collection('blockchain_ledger').doc(bloodUnitID);
+    await ledgerRef.set({
+      bloodUnitID: bloodUnitID,
+      donorUID: donorUID,
+      bloodType: bloodType,
+      donatedAt: timestamp,
+      currentStatus: "Verified",
+      location: location,
+      statusHistory: [newStatusEntry] // Create the history array
     });
 
-    // 3B. Update the PRIVATE "donation_history" doc for the user
-    const privateRef = db.collection('user_profiles').doc(donorUid)
-                         .collection('donation_history').doc(bloodUnitID);
-    batch.update(privateRef, {
-      status: newStatus, // Update the quick-reference status
-      location: newLocation
+    // 2. Write to the user's private, deprecated history (for now)
+    const historyRef = db.collection('user_profiles').doc(donorUID).collection('donation_history').doc(bloodUnitID);
+    await historyRef.set({
+      donatedAt: timestamp,
+      location: location,
+      status: "Verified",
+      bloodUnitID: bloodUnitID
     });
+    
+    res.status(201).send({ message: 'Donation registered successfully.' });
+  } catch (error) {
+    console.error('Error registering donation:', error);
+    res.status(500).send({ error: 'Internal Server Error' });
+  }
+});
 
-    // 4. Commit the atomic write
-    await batch.commit();
+// --- Endpoint: Update Status ---
+app.post('/api/update-status', verifyToken, async (req, res) => {
+  const { uid } = req.user;
+  const userRoleDoc = await db.collection('user_roles').doc(uid).get();
+  const userRole = userRoleDoc.data()?.role;
 
-    res.status(200).json({ message: `Status for ${bloodUnitID} updated to ${newStatus}` });
+  if (userRole !== 'medical_staff') {
+    return res.status(403).send({ error: 'Forbidden: You do not have permission.' });
+  }
 
+  // --- DEBUGGING: Log the received body ---
+  console.log('Update status request received. Body:', req.body);
+  // -------------------------------------
+
+  const { bloodUnitID, newStatus, location } = req.body;
+  if (!bloodUnitID || !newStatus || !location) {
+    console.error('Validation failed. One or more fields are missing.', req.body);
+    return res.status(400).send({ error: 'Bad Request: Missing required fields.' });
+  }
+
+  try {
+    const timestamp = new Date();
+    const newStatusEntry = {
+      status: newStatus,
+      location: location,
+      timestamp: timestamp,
+    };
+    
+    const ledgerRef = db.collection('blockchain_ledger').doc(bloodUnitID);
+
+    // Atomically add the new status to the history array and update current status
+    await ledgerRef.update({
+      currentStatus: newStatus,
+      location: location,
+      statusHistory: admin.firestore.FieldValue.arrayUnion(newStatusEntry)
+    });
+    
+    res.status(200).send({ message: 'Status updated successfully.' });
   } catch (error) {
     console.error('Error updating status:', error);
-    res.status(500).json({ error: 'Internal Server Error' });
+    res.status(500).send({ error: 'Internal Server Error' });
   }
 });
 
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
-
 
